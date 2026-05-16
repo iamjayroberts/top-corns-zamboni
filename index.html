@@ -1,0 +1,1100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Top Corns Zamboni</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+    font-family: 'Press Start 2P', monospace;
+    color: #f6efd6;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  #app {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(ellipse at center, #0a0e1a 0%, #000 80%), #000;
+  }
+
+  /* Portrait stage: 3:4 aspect (taller than wide) */
+  #stage {
+    position: relative;
+    width: min(100vw, calc(100vh * 3 / 4));
+    height: min(100vh, calc(100vw * 4 / 3));
+    background: #000;
+    overflow: hidden;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+    box-shadow:
+      0 0 0 4px #000,
+      0 0 40px rgba(60, 120, 220, 0.25);
+  }
+
+  canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+    display: block;
+  }
+
+  #scanlines {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0.0) 0px,
+      rgba(0, 0, 0, 0.0) 2px,
+      rgba(0, 0, 0, 0.18) 3px,
+      rgba(0, 0, 0, 0.0) 4px
+    );
+    mix-blend-mode: multiply;
+    z-index: 50;
+  }
+
+  #vignette {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.55) 100%);
+    z-index: 51;
+  }
+
+  .tap-fx {
+    position: absolute;
+    pointer-events: none;
+    font-size: clamp(8px, 1.4vw, 14px);
+    color: #f5c842;
+    text-shadow: 2px 2px 0 #1a0f08;
+    z-index: 40;
+    animation: tapFx 0.6s ease-out forwards;
+    transform: translate(-50%, 0);
+  }
+  @keyframes tapFx {
+    0%   { transform: translate(-50%, 0) scale(1); opacity: 1; }
+    100% { transform: translate(-50%, -40px) scale(1.4); opacity: 0; }
+  }
+
+  #loading {
+    position: absolute;
+    inset: 0;
+    background: #000;
+    color: #f5c842;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    font-size: clamp(10px, 2vw, 18px);
+    letter-spacing: 2px;
+  }
+  #loading.hidden { display: none; }
+  #loading .dots::after {
+    content: '';
+    animation: dots 1.2s steps(4, end) infinite;
+  }
+  @keyframes dots {
+    0% { content: ''; }
+    25% { content: '.'; }
+    50% { content: '..'; }
+    75% { content: '...'; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="game" width="600" height="800"></canvas>
+    <div id="scanlines"></div>
+    <div id="vignette"></div>
+    <div id="loading">
+      <div>LOADING<span class="dots"></span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* TOP CORNS ZAMBONI — portrait orientation, 600x800 */
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+const W = canvas.width;   // 600
+const H = canvas.height;  // 800
+
+const loadingEl = document.getElementById('loading');
+
+const State = {
+  INTRO: 'intro',
+  COACH: 'coach',
+  SELECT: 'select',
+  COUNTDOWN: 'countdown',
+  PLAY: 'play',
+  RESULT: 'result',
+};
+let state = State.INTRO;
+
+const ROSTER = [
+  { num: 19, name: 'JOHNSTON' },
+  { num: 8,  name: 'QUIRICO'  },
+  { num: 52, name: 'SPRADLING'},
+  { num: 98, name: 'KING'     },
+  { num: 91, name: 'SOYK'     },
+];
+let selectedIdx = 1;
+let chosenPlayer = null;
+
+const coachLines = [
+  "WELCOME BACK, ROOKIE.",
+  "QUICK QUESTION...",
+  "DID YOU PAY YOUR LEAGUE FEES THIS MONTH?",
+  "...NO?",
+  "YEAH, I FIGURED.",
+  "GRAB THE KEYS TO THE ZAMBONI.",
+  "YOU'RE FLOODING THE ICE TONIGHT.",
+  "FASTEST RESURFACE WINS THE NIGHT.",
+  "LET'S HIT THE ICE AND GET BETTER EVERY DAY!"
+];
+let coachLineIdx = 0;
+let coachCharIdx = 0;
+let coachCharTimer = 0;
+let coachLineComplete = false;
+
+const IMG = {};
+const ASSETS = {
+  coach:     'assets/coach.png',
+  coachFace: 'assets/coach_face.png',
+  jersey:    'assets/jersey.png',
+  rink:      'assets/rink.png',
+  zamboni:   'assets/zamboni.png',
+};
+
+function loadAll() {
+  return Promise.all(Object.entries(ASSETS).map(([k, src]) =>
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => { IMG[k] = img; resolve(); };
+      img.onerror = () => reject(new Error('Failed to load ' + src));
+      img.src = src;
+    })
+  ));
+}
+
+function pixelText(text, x, y, size, color, shadow=true) {
+  ctx.font = `${size}px "Press Start 2P", monospace`;
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+  if (shadow) { ctx.fillStyle = '#1a0f08'; ctx.fillText(text, x + 2, y + 2); }
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+}
+function pixelTextCenter(text, x, y, size, color, shadow=true) {
+  ctx.font = `${size}px "Press Start 2P", monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  if (shadow) { ctx.fillStyle = '#1a0f08'; ctx.fillText(text, x + 2, y + 2); }
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+  ctx.textAlign = 'left';
+}
+
+function roundedRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  ctx.fill();
+}
+
+// ============================================================
+// INTRO
+// ============================================================
+function drawIntroScene(t) {
+  // Deep blue arena banner background
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#0e235a');
+  grad.addColorStop(0.55, '#1d3f8a');
+  grad.addColorStop(1, '#0a1430');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Pulsing title
+  const pulse = 1 + Math.sin(t / 400) * 0.025;
+  ctx.save();
+  ctx.translate(W/2, 110);
+  ctx.scale(pulse, pulse);
+  pixelTextCenter("★  COLORADO SPRINGS WORLD ARENA  ★", 0, -34, 9, '#f6efd6');
+  // Stacked color layers for that classic title look
+  ctx.font = `38px "Press Start 2P", monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = '#5a0a0d';
+  ctx.fillText("TOP CORNS", 5, 5);
+  ctx.fillStyle = '#f5c842';
+  ctx.fillText("TOP CORNS", 2, 2);
+  ctx.fillStyle = '#d6262b';
+  ctx.fillText("TOP CORNS", 0, 0);
+  ctx.restore();
+
+  pixelTextCenter("ZAMBONI", W/2, 178, 26, '#f6efd6');
+  pixelTextCenter("- CHALLENGE -", W/2, 218, 12, '#f5c842');
+
+  // Floating jersey, centered
+  const float = Math.sin(t / 500) * 6;
+  const jerseySize = Math.min(W * 0.78, 380);
+  const jx = W/2 - jerseySize/2;
+  const jy = 270 + float;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+  ctx.beginPath();
+  ctx.ellipse(W/2, jy + jerseySize + 8, jerseySize * 0.4, 14, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.drawImage(IMG.jersey, jx, jy, jerseySize, jerseySize);
+
+  pixelTextCenter("CAN YOU CLEAR THE ICE FAST ENOUGH?", W/2, H - 130, 10, '#b8c4d4');
+
+  if (Math.floor(t / 500) % 2 === 0) {
+    pixelTextCenter("TAP TO START", W/2, H - 80, 16, '#f5c842');
+  }
+  pixelTextCenter("PRESS ENTER OR TAP ANYWHERE", W/2, H - 36, 8, '#8a96aa');
+}
+
+// ============================================================
+// COACH
+// ============================================================
+function drawCoachScene() {
+  ctx.fillStyle = '#dee9f3';
+  ctx.fillRect(0, 0, W, H);
+
+  const img = IMG.coach;
+  const boxH = 200;
+  const headerH = 40;
+  const availH = H - boxH - headerH;
+  const scale = Math.min(W / img.width, availH / img.height);
+  const drawW = img.width * scale;
+  const drawH = img.height * scale;
+  const dx = (W - drawW) / 2;
+  const dy = headerH + (availH - drawH) / 2;
+  ctx.drawImage(img, dx, dy, drawW, drawH);
+
+  ctx.fillStyle = '#102266';
+  ctx.fillRect(0, 0, W, headerH);
+  ctx.fillStyle = '#2848b8';
+  ctx.fillRect(0, 0, W, 2);
+  ctx.fillStyle = '#0a1430';
+  ctx.fillRect(0, headerH - 2, W, 2);
+  pixelTextCenter("TOP CORNS HOCKEY CLUB", W/2, 14, 14, '#f5c842');
+
+  drawDialogueBox(coachLines[coachLineIdx], coachCharIdx);
+
+  if (coachLineComplete && Math.floor(performance.now() / 500) % 2 === 0) {
+    pixelTextCenter("▼", W - 40, H - 32, 18, '#f6efd6');
+  }
+}
+
+function drawDialogueBox(line, charsToShow) {
+  const bw = W - 32, bh = 180;
+  const bx = 16, by = H - bh - 16;
+
+  ctx.fillStyle = '#f6efd6';
+  roundedRect(bx, by, bw, bh, 6);
+  ctx.fillStyle = '#c5b78a';
+  roundedRect(bx + 4, by + 4, bw - 8, bh - 8, 5);
+  ctx.fillStyle = '#102266';
+  roundedRect(bx + 8, by + 8, bw - 16, bh - 16, 4);
+  ctx.fillStyle = '#2848b8';
+  ctx.fillRect(bx + 10, by + 10, bw - 20, 2);
+
+  const fs = 110;
+  const fx = bx + 16, fy = by + 16;
+  ctx.fillStyle = '#0a1844';
+  ctx.fillRect(fx, fy, fs, fs);
+  ctx.fillStyle = '#f6efd6';
+  ctx.fillRect(fx, fy, fs, 2);
+  ctx.fillRect(fx, fy + fs - 2, fs, 2);
+  ctx.fillRect(fx, fy, 2, fs);
+  ctx.fillRect(fx + fs - 2, fy, 2, fs);
+  ctx.drawImage(IMG.coachFace, fx + 4, fy + 4, fs - 8, fs - 8);
+
+  const textX = fx + fs + 18;
+  const textW = bw - (textX - bx) - 24;
+  pixelText("COACH AL:", textX, by + 22, 14, '#f6efd6');
+  const visible = line.slice(0, charsToShow);
+  wrapText(visible, textX, by + 56, textW, 12, 18, '#f6efd6');
+}
+
+function wrapText(text, x, y, maxWidth, fontSize, lineHeight, color) {
+  ctx.font = `${fontSize}px "Press Start 2P", monospace`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  const words = text.split(' ');
+  let line = '';
+  let cy = y;
+  for (let i = 0; i < words.length; i++) {
+    const test = line ? line + ' ' + words[i] : words[i];
+    if (ctx.measureText(test).width > maxWidth && line) {
+      ctx.fillStyle = '#1a0f08';
+      ctx.fillText(line, x + 2, cy + 2);
+      ctx.fillStyle = color;
+      ctx.fillText(line, x, cy);
+      line = words[i];
+      cy += lineHeight;
+    } else {
+      line = test;
+    }
+  }
+  if (line) {
+    ctx.fillStyle = '#1a0f08';
+    ctx.fillText(line, x + 2, cy + 2);
+    ctx.fillStyle = color;
+    ctx.fillText(line, x, cy);
+  }
+}
+
+// ============================================================
+// PLAYER SELECT — vertical list, no painted numbers on jerseys
+// ============================================================
+const SELECT_START_Y = 120;
+const SELECT_ROW_H = 116;
+
+function drawSelectScene(t) {
+  ctx.fillStyle = '#0a1430';
+  ctx.fillRect(0, 0, W, H);
+  const grad = ctx.createRadialGradient(W/2, -60, 20, W/2, 280, 480);
+  grad.addColorStop(0, 'rgba(255, 220, 120, 0.30)');
+  grad.addColorStop(1, 'rgba(255, 220, 120, 0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  pixelTextCenter("SELECT YOUR PLAYER", W/2, 36, 18, '#f5c842');
+  pixelTextCenter("- TOP CORNS ROSTER -", W/2, 74, 10, '#d6262b');
+
+  for (let i = 0; i < ROSTER.length; i++) {
+    drawPlayerRow(i, SELECT_START_Y + i * SELECT_ROW_H, i === selectedIdx, t);
+  }
+
+  pixelTextCenter("TAP TO SELECT  ·  TAP AGAIN TO CONFIRM", W/2, H - 36, 8, '#f6efd6');
+}
+
+function drawPlayerRow(idx, y, selected, t) {
+  const player = ROSTER[idx];
+  const rowH = 100;
+  const rowW = W - 40;
+  const rx = 20;
+  const ry = y;
+
+  if (selected) {
+    ctx.fillStyle = '#1d3f8a';
+    roundedRect(rx, ry, rowW, rowH, 6);
+    ctx.fillStyle = '#3265c8';
+    roundedRect(rx + 3, ry + 3, rowW - 6, rowH - 6, 4);
+    ctx.fillStyle = '#102266';
+    roundedRect(rx + 6, ry + 6, rowW - 12, rowH - 12, 3);
+  } else {
+    ctx.fillStyle = '#0e1838';
+    roundedRect(rx, ry, rowW, rowH, 6);
+    ctx.fillStyle = '#1a274a';
+    roundedRect(rx + 2, ry + 2, rowW - 4, rowH - 4, 5);
+  }
+
+  // Jersey (no number painted on it — same image for everyone)
+  const jSize = selected ? 96 : 88;
+  const bob = selected ? Math.sin(t / 220) * 3 : 0;
+  const jx = rx + 12;
+  const jy = ry + (rowH - jSize) / 2 + bob;
+  ctx.drawImage(IMG.jersey, jx, jy, jSize, jSize);
+
+  // Name on top, number underneath
+  const textX = rx + 130;
+  pixelText(player.name, textX, ry + 28, selected ? 18 : 16, selected ? '#f5c842' : '#f6efd6');
+  pixelText("#" + player.num, textX, ry + 58, selected ? 22 : 18, selected ? '#fff' : '#b8c4d4');
+
+  if (selected) {
+    const arrowX = rx + rowW - 30;
+    const arrowY = ry + rowH / 2;
+    const wob = Math.sin(t / 200) * 3;
+    ctx.fillStyle = '#f5c842';
+    ctx.beginPath();
+    ctx.moveTo(arrowX + wob, arrowY - 10);
+    ctx.lineTo(arrowX + wob, arrowY + 10);
+    ctx.lineTo(arrowX - 12 + wob, arrowY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#1a0f08';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+}
+
+// ============================================================
+// GAMEPLAY
+// ============================================================
+let rinkBaseCanvas;
+let rinkMaskCanvas;
+let rinkMaskCtx;
+let rinkInner;
+let rinkBounds;
+
+const HUD_H = 70;
+
+let zamboni = {
+  theta: 0,
+  speed: 0,
+  targetSpeed: 0,
+  lap: 0,
+  totalLaps: 7,
+  trailWidth: 30,
+  finished: false,
+  x: 0, y: 0, heading: 0,
+};
+
+let tapHistory = [];
+let startTime = 0;
+let endTime = 0;
+let countdownStart = 0;
+const countdownDuration = 3500;
+
+function initGameplay() {
+  rinkBaseCanvas = document.createElement('canvas');
+  rinkBaseCanvas.width = W;
+  rinkBaseCanvas.height = H;
+  const rbc = rinkBaseCanvas.getContext('2d');
+  rbc.imageSmoothingEnabled = false;
+
+  rbc.fillStyle = '#000';
+  rbc.fillRect(0, 0, W, H);
+
+  const availY = H - HUD_H;
+  const scale = Math.min(W / IMG.rink.width, availY / IMG.rink.height);
+  const drawW = IMG.rink.width * scale;
+  const drawH = IMG.rink.height * scale;
+  const dx = (W - drawW) / 2;
+  const dy = HUD_H + (availY - drawH) / 2;
+
+  rbc.fillStyle = '#000';
+  rbc.fillRect(0, HUD_H, W, availY);
+  rbc.drawImage(IMG.rink, dx, dy, drawW, drawH);
+
+  const iceX = dx + drawW * 0.06;
+  const iceY = dy + drawH * 0.22;
+  const iceX2 = dx + drawW * 0.94;
+  const iceY2 = dy + drawH * 0.97;
+  rinkInner = { x: iceX, y: iceY, w: iceX2 - iceX, h: iceY2 - iceY };
+
+  // Rounded-rectangle path. We define the OUTER rectangle the zamboni rides on
+  // (slightly inside the ice). Each lap, it shrinks inward by `lapStep`.
+  const margin = 20;
+  rinkBounds = {
+    cx: (iceX + iceX2) / 2,
+    cy: (iceY + iceY2) / 2,
+    // Outer half-width/height of the path:
+    halfW: (iceX2 - iceX) / 2 - margin,
+    halfH: (iceY2 - iceY) / 2 - margin,
+    // Corner radius proportional to the smaller dimension
+    cornerR: Math.min((iceX2 - iceX), (iceY2 - iceY)) * 0.18,
+  };
+
+  rinkMaskCanvas = document.createElement('canvas');
+  rinkMaskCanvas.width = W;
+  rinkMaskCanvas.height = H;
+  rinkMaskCtx = rinkMaskCanvas.getContext('2d');
+  fillDirtyIce();
+
+  // theta parameter: 0..1 along one full lap of perimeter, increments without wrapping
+  zamboni.theta = 0;
+  zamboni.speed = 0;
+  zamboni.targetSpeed = 0;
+  zamboni.lap = 0;
+  zamboni.finished = false;
+  tapHistory.length = 0;
+  // Start at top-middle of the rink (theta = 0 on our path)
+  const startPos = pathPoint(0, 0);
+  zamboni.x = startPos.x;
+  zamboni.y = startPos.y;
+  zamboni.heading = startPos.heading;
+}
+
+// Returns a point on the rounded-rect path at parameter u (0..1 = one full lap),
+// shrunk by lapsCompleted (each lap shrinks the rect inward).
+// shrinkFactor 0..1: 1.0 = outer, 0.0 = center. We compute continuously based on
+// the cumulative position so the spiral is smooth (no stepping at lap boundaries).
+function pathPoint(u, lapsCompleted) {
+  u = ((u % 1) + 1) % 1;
+
+  // Continuous shrink: 1.0 at lap 0, 0.0 at totalLaps
+  const totalLaps = zamboni.totalLaps;
+  const t = Math.min(1, lapsCompleted / totalLaps);
+  const shrink = 1 - t;
+
+  const cx = rinkBounds.cx;
+  const cy = rinkBounds.cy;
+  const hw = rinkBounds.halfW * shrink;
+  const hh = rinkBounds.halfH * shrink;
+  let r = rinkBounds.cornerR * shrink;
+  r = Math.min(r, hw, hh);
+
+  // Perimeter is: top edge + TR corner + right edge + BR corner + bottom + BL + left + TL
+  // Edge lengths:
+  const eTop    = 2 * (hw - r);   // straight horizontal at top
+  const eRight  = 2 * (hh - r);   // straight vertical on right
+  const eBottom = 2 * (hw - r);
+  const eLeft   = 2 * (hh - r);
+  const cArc    = (Math.PI / 2) * r; // quarter-circle arc length
+  const total = eTop + eRight + eBottom + eLeft + 4 * cArc;
+
+  // Special case: if shrunk to a point, return center
+  if (total <= 0.001) {
+    return { x: cx, y: cy, heading: 0 };
+  }
+
+  // We start at top-center moving CLOCKWISE: top → TR corner → right → BR → bottom → BL → left → TL → back to top
+  let d = u * total;
+  let x, y, heading;
+
+  // Segment 1: top edge — from top-center to top-right corner start
+  // top-center is at (cx, cy - hh); we move right along y = cy - hh until x = cx + hw - r
+  if (d < eTop / 2) {
+    x = cx + d;
+    y = cy - hh;
+    heading = 0; // moving +x
+    return { x, y, heading };
+  }
+  d -= eTop / 2;
+
+  // Segment 2: TR quarter circle, from (cx + hw - r, cy - hh) to (cx + hw, cy - hh + r)
+  if (d < cArc) {
+    const a = d / r; // 0..π/2
+    const ang = -Math.PI / 2 + a; // start angle pointing up, sweep right
+    x = (cx + hw - r) + Math.cos(ang) * r;
+    y = (cy - hh + r) + Math.sin(ang) * r;
+    heading = ang + Math.PI / 2; // tangent
+    return { x, y, heading };
+  }
+  d -= cArc;
+
+  // Segment 3: right edge, from (cx + hw, cy - hh + r) to (cx + hw, cy + hh - r)
+  if (d < eRight) {
+    x = cx + hw;
+    y = (cy - hh + r) + d;
+    heading = Math.PI / 2; // moving +y
+    return { x, y, heading };
+  }
+  d -= eRight;
+
+  // Segment 4: BR quarter circle
+  if (d < cArc) {
+    const a = d / r;
+    const ang = 0 + a;
+    x = (cx + hw - r) + Math.cos(ang) * r;
+    y = (cy + hh - r) + Math.sin(ang) * r;
+    heading = ang + Math.PI / 2;
+    return { x, y, heading };
+  }
+  d -= cArc;
+
+  // Segment 5: bottom edge, from (cx + hw - r, cy + hh) to (cx - hw + r, cy + hh)
+  if (d < eBottom) {
+    x = (cx + hw - r) - d;
+    y = cy + hh;
+    heading = Math.PI; // moving -x
+    return { x, y, heading };
+  }
+  d -= eBottom;
+
+  // Segment 6: BL quarter circle
+  if (d < cArc) {
+    const a = d / r;
+    const ang = Math.PI / 2 + a;
+    x = (cx - hw + r) + Math.cos(ang) * r;
+    y = (cy + hh - r) + Math.sin(ang) * r;
+    heading = ang + Math.PI / 2;
+    return { x, y, heading };
+  }
+  d -= cArc;
+
+  // Segment 7: left edge, from (cx - hw, cy + hh - r) to (cx - hw, cy - hh + r)
+  if (d < eLeft) {
+    x = cx - hw;
+    y = (cy + hh - r) - d;
+    heading = -Math.PI / 2; // moving -y
+    return { x, y, heading };
+  }
+  d -= eLeft;
+
+  // Segment 8: TL quarter circle
+  if (d < cArc) {
+    const a = d / r;
+    const ang = Math.PI + a;
+    x = (cx - hw + r) + Math.cos(ang) * r;
+    y = (cy - hh + r) + Math.sin(ang) * r;
+    heading = ang + Math.PI / 2;
+    return { x, y, heading };
+  }
+  d -= cArc;
+
+  // Segment 9: back along top edge to start (cx - hw + r → cx)
+  x = (cx - hw + r) + d;
+  y = cy - hh;
+  heading = 0;
+  return { x, y, heading };
+}
+
+function fillDirtyIce() {
+  const c = rinkMaskCtx;
+  c.clearRect(0, 0, W, H);
+  c.save();
+  const ix = rinkInner.x, iy = rinkInner.y;
+  const iw = rinkInner.w, ih = rinkInner.h;
+  const r = 20;
+  c.beginPath();
+  c.moveTo(ix + r, iy);
+  c.lineTo(ix + iw - r, iy);
+  c.quadraticCurveTo(ix + iw, iy, ix + iw, iy + r);
+  c.lineTo(ix + iw, iy + ih - r);
+  c.quadraticCurveTo(ix + iw, iy + ih, ix + iw - r, iy + ih);
+  c.lineTo(ix + r, iy + ih);
+  c.quadraticCurveTo(ix, iy + ih, ix, iy + ih - r);
+  c.lineTo(ix, iy + r);
+  c.quadraticCurveTo(ix, iy, ix + r, iy);
+  c.closePath();
+  c.clip();
+
+  c.fillStyle = 'rgba(120, 135, 155, 0.55)';
+  c.fillRect(ix, iy, iw, ih);
+
+  for (let i = 0; i < 1600; i++) {
+    const x = ix + Math.random() * iw;
+    const y = iy + Math.random() * ih;
+    const s = 1 + Math.random() * 2;
+    c.fillStyle = `rgba(${60+Math.random()*40|0}, ${75+Math.random()*40|0}, ${90+Math.random()*40|0}, ${0.3 + Math.random()*0.45})`;
+    c.fillRect(x, y, s, s);
+  }
+  c.strokeStyle = 'rgba(70, 85, 100, 0.55)';
+  c.lineWidth = 1;
+  for (let i = 0; i < 180; i++) {
+    const x = ix + Math.random() * iw;
+    const y = iy + Math.random() * ih;
+    const len = 6 + Math.random() * 28;
+    const ang = Math.random() * Math.PI * 2;
+    c.beginPath();
+    c.moveTo(x, y);
+    c.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len);
+    c.stroke();
+  }
+  c.restore();
+}
+
+function shaveIce(x, y, r) {
+  const c = rinkMaskCtx;
+  c.save();
+  c.globalCompositeOperation = 'destination-out';
+  const grad = c.createRadialGradient(x, y, 0, x, y, r);
+  grad.addColorStop(0, 'rgba(0,0,0,1)');
+  grad.addColorStop(0.65, 'rgba(0,0,0,0.85)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  c.fillStyle = grad;
+  c.beginPath();
+  c.arc(x, y, r, 0, Math.PI*2);
+  c.fill();
+  c.restore();
+}
+
+function drawZamboniSprite(x, y, heading) {
+  const img = IMG.zamboni;
+  const targetW = 60;
+  const scale = targetW / img.width;
+  const dw = img.width * scale;
+  const dh = img.height * scale;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(heading);
+  ctx.drawImage(img, -dw/2, -dh/2, dw, dh);
+  ctx.restore();
+}
+
+function drawHUD(t) {
+  ctx.fillStyle = '#102266';
+  ctx.fillRect(0, 0, W, HUD_H);
+  ctx.fillStyle = '#2848b8';
+  ctx.fillRect(0, 0, W, 3);
+  ctx.fillStyle = '#0a1430';
+  ctx.fillRect(0, HUD_H - 3, W, 3);
+
+  if (chosenPlayer) {
+    ctx.fillStyle = '#d6262b';
+    ctx.fillRect(12, 14, 58, 38);
+    ctx.fillStyle = '#f6efd6';
+    ctx.fillRect(12, 14, 58, 2);
+    ctx.fillRect(12, 50, 58, 2);
+    ctx.fillRect(12, 14, 2, 38);
+    ctx.fillRect(68, 14, 2, 38);
+    pixelTextCenter('#' + chosenPlayer.num, 41, 25, 13, '#fff');
+    pixelText(chosenPlayer.name, 82, 26, 12, '#f6efd6');
+  }
+
+  let elapsed = 0;
+  if (state === State.PLAY) elapsed = (t - startTime) / 1000;
+  else if (state === State.RESULT) elapsed = (endTime - startTime) / 1000;
+  pixelTextCenter(formatTime(elapsed), W/2, 50, 16, '#f5c842');
+
+  pixelText(`${Math.round(lastProgress * 100)}%`, W - 80, 26, 13, '#b8e0ff');
+}
+
+let lastProgress = 0;
+let progressTimer = 0;
+
+function drawCountdownScene(t) {
+  drawPlayBackground();
+  drawZamboniSprite(zamboni.x, zamboni.y, zamboni.heading);
+  drawHUD(t);
+
+  const elapsed = t - countdownStart;
+  const remain = Math.max(0, countdownDuration - elapsed);
+  const sec = Math.ceil(remain / 1000);
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.fillRect(0, H * 0.35, W, H * 0.30);
+
+  if (sec > 0) {
+    const label = sec === 3 ? "READY" : (sec === 2 ? "SET" : "GO!");
+    pixelTextCenter(label, W/2, H * 0.38, 24, '#f5c842');
+    pixelTextCenter(String(sec), W/2, H * 0.46, 48, '#fff');
+    pixelTextCenter("TAP RAPIDLY TO DRIVE", W/2, H * 0.60, 10, '#f6efd6');
+  }
+
+  if (remain <= 0) {
+    state = State.PLAY;
+    startTime = performance.now();
+  }
+}
+
+function drawPlayBackground() {
+  ctx.drawImage(rinkBaseCanvas, 0, 0);
+  ctx.drawImage(rinkMaskCanvas, 0, 0);
+}
+
+function updatePlay(t, dt) {
+  if (zamboni.finished) return;
+  zamboni.speed += (zamboni.targetSpeed - zamboni.speed) * 0.12;
+  zamboni.targetSpeed *= 0.965;
+
+  // theta now represents laps completed (continuous, not radians).
+  // speed needs to be re-scaled: the old ellipse used radians (2π per lap).
+  // We want similar feel: one "tick" of old speed ~ moving same arc length.
+  // Each lap on the rounded rect is one whole unit of theta now.
+  // Convert: old top angular speed was ~0.10 rad/frame = ~0.016 laps/frame.
+  // So scale our speed down accordingly when stepping theta.
+  zamboni.theta += zamboni.speed / (Math.PI * 2);
+
+  // Lap tracking (integer number of completed laps)
+  zamboni.lap = Math.floor(zamboni.theta);
+  const lapFrac = zamboni.theta - zamboni.lap;
+
+  // Continuous progress: how far around plus how many laps done
+  const lapsCompleted = zamboni.theta;
+
+  // Get position on the rounded-rect spiral path
+  const pos = pathPoint(lapFrac, lapsCompleted);
+  zamboni.x = pos.x;
+  zamboni.y = pos.y;
+  zamboni.heading = pos.heading;
+
+  shaveIce(zamboni.x, zamboni.y, zamboni.trailWidth);
+
+  progressTimer += dt;
+  if (progressTimer > 250) {
+    progressTimer = 0;
+    lastProgress = computeProgress();
+  }
+
+  // Finish when we've done all laps OR cleared enough ice
+  if (lapsCompleted >= zamboni.totalLaps || lastProgress > 0.95) {
+    zamboni.finished = true;
+    endTime = performance.now();
+    setTimeout(() => { state = State.RESULT; }, 700);
+  }
+}
+
+function computeProgress() {
+  const cols = 40, rows = 30;
+  const ix = Math.floor(rinkInner.x), iy = Math.floor(rinkInner.y);
+  const iw = Math.floor(rinkInner.w), ih = Math.floor(rinkInner.h);
+  const data = rinkMaskCtx.getImageData(ix, iy, iw, ih).data;
+  let cleared = 0, total = 0;
+  const dx = iw / cols, dy = ih / rows;
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const px = Math.floor(i * dx + dx/2);
+      const py = Math.floor(j * dy + dy/2);
+      const idx = (py * iw + px) * 4 + 3;
+      total++;
+      if (data[idx] < 30) cleared++;
+    }
+  }
+  return cleared / total;
+}
+
+function drawPlayScene(t) {
+  drawPlayBackground();
+  drawZamboniSprite(zamboni.x, zamboni.y, zamboni.heading);
+  drawHUD(t);
+}
+
+// ============================================================
+// RESULT
+// ============================================================
+let savedThisRun = false;
+function drawResultScene(t) {
+  drawPlayBackground();
+  drawZamboniSprite(zamboni.x, zamboni.y, zamboni.heading);
+  drawHUD(t);
+
+  ctx.fillStyle = 'rgba(8, 14, 32, 0.78)';
+  ctx.fillRect(0, 0, W, H);
+
+  const px = 40, py = 80, pw = W - 80, ph = H - 160;
+  ctx.fillStyle = '#f6efd6';
+  roundedRect(px, py, pw, ph, 8);
+  ctx.fillStyle = '#c5b78a';
+  roundedRect(px+4, py+4, pw-8, ph-8, 6);
+  ctx.fillStyle = '#102266';
+  roundedRect(px+8, py+8, pw-16, ph-16, 4);
+  ctx.fillStyle = '#2848b8';
+  ctx.fillRect(px+10, py+10, pw-20, 2);
+
+  const elapsed = (endTime - startTime) / 1000;
+  pixelTextCenter("ICE RESURFACED!", W/2, py + 36, 20, '#f5c842');
+  pixelTextCenter(`${chosenPlayer.name}  #${chosenPlayer.num}`, W/2, py + 80, 13, '#fff');
+  pixelTextCenter("YOUR TIME", W/2, py + 130, 11, '#b8c4d4');
+  pixelTextCenter(formatTime(elapsed), W/2, py + 154, 28, '#f5c842');
+
+  if (!savedThisRun) {
+    savedThisRun = true;
+    const prev = getBestTime(chosenPlayer.num);
+    if (prev === null || elapsed < prev) setBestTime(chosenPlayer.num, elapsed);
+  }
+  const best = getBestTime(chosenPlayer.num);
+  const isNewBest = (best !== null && Math.abs(best - elapsed) < 0.001);
+  pixelTextCenter(isNewBest ? `NEW BEST!` : `BEST: ${formatTime(best)}`,
+                  W/2, py + 210, 11, isNewBest ? '#f5c842' : '#fff');
+
+  const board = getLeaderboard();
+  pixelTextCenter("- LEADERBOARD -", W/2, py + 256, 11, '#f5c842');
+  for (let i = 0; i < Math.min(5, board.length); i++) {
+    const e = board[i];
+    const isMe = (e.num === chosenPlayer.num);
+    pixelTextCenter(`${i+1}. ${e.name} #${e.num}  ${formatTime(e.time)}`,
+                    W/2, py + 286 + i * 22, 9, isMe ? '#f5c842' : '#cfd6e3');
+  }
+
+  if (Math.floor(t / 500) % 2 === 0) {
+    pixelTextCenter("TAP / ENTER TO PLAY AGAIN", W/2, py + ph - 40, 10, '#f6efd6');
+  }
+}
+
+function formatTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = sec - m * 60;
+  return `${String(m).padStart(2,'0')}:${s.toFixed(2).padStart(5,'0')}`;
+}
+
+const LB_KEY = 'topCornsZamboniLB_v3';
+function readLB() {
+  try { return JSON.parse(localStorage.getItem(LB_KEY)) || {}; } catch { return {}; }
+}
+function writeLB(o) {
+  try { localStorage.setItem(LB_KEY, JSON.stringify(o)); } catch {}
+}
+function getBestTime(num) {
+  const lb = readLB();
+  return (lb[num] !== undefined) ? lb[num] : null;
+}
+function setBestTime(num, time) {
+  const lb = readLB();
+  lb[num] = time;
+  writeLB(lb);
+}
+function getLeaderboard() {
+  const lb = readLB();
+  const arr = [];
+  for (const r of ROSTER) {
+    if (lb[r.num] !== undefined) arr.push({ num: r.num, name: r.name, time: lb[r.num] });
+  }
+  arr.sort((a,b) => a.time - b.time);
+  return arr;
+}
+
+// ============================================================
+// INPUT
+// ============================================================
+function onPointer(ev) {
+  ev.preventDefault();
+
+  if (state === State.INTRO) {
+    state = State.COACH;
+    coachLineIdx = 0;
+    coachCharIdx = 0;
+    coachLineComplete = false;
+    return;
+  }
+
+  if (state === State.COACH) {
+    if (!coachLineComplete) {
+      coachCharIdx = coachLines[coachLineIdx].length;
+      coachLineComplete = true;
+      return;
+    }
+    coachLineIdx++;
+    coachCharIdx = 0;
+    coachLineComplete = false;
+    if (coachLineIdx >= coachLines.length) enterSelect();
+    return;
+  }
+
+  if (state === State.SELECT) {
+    const rect = canvas.getBoundingClientRect();
+    const clientY = ev.clientY ?? (ev.touches && ev.touches[0]?.clientY);
+    if (clientY != null && !isNaN(clientY)) {
+      const py = (clientY - rect.top) * (H / rect.height);
+      const idx = Math.floor((py - SELECT_START_Y) / SELECT_ROW_H);
+      if (idx >= 0 && idx < ROSTER.length) {
+        if (idx === selectedIdx) confirmSelection();
+        else selectedIdx = idx;
+      }
+    } else {
+      selectedIdx = (selectedIdx + 1) % ROSTER.length;
+    }
+    return;
+  }
+
+  if (state === State.PLAY) {
+    const now = performance.now();
+    tapHistory.push(now);
+    while (tapHistory.length && tapHistory[0] < now - 800) tapHistory.shift();
+    const rate = tapHistory.length / 0.8;
+    const boost = 0.012 + Math.min(0.06, rate * 0.005);
+    zamboni.targetSpeed = Math.min(0.10, zamboni.targetSpeed + boost);
+    spawnTapFx(ev);
+    return;
+  }
+
+  if (state === State.RESULT) resetForRetry();
+}
+
+function spawnTapFx(ev) {
+  const rect = canvas.getBoundingClientRect();
+  const x = ev.clientX ?? (ev.touches && ev.touches[0]?.clientX);
+  const y = ev.clientY ?? (ev.touches && ev.touches[0]?.clientY);
+  if (x == null || y == null) return;
+  const el = document.createElement('div');
+  el.className = 'tap-fx';
+  el.style.left = (x - rect.left) + 'px';
+  el.style.top  = (y - rect.top) + 'px';
+  const msgs = ["+", "FASTER!", "GO!", "BRRR", "ZOOM", "+"];
+  el.textContent = msgs[Math.floor(Math.random() * msgs.length)];
+  document.getElementById('stage').appendChild(el);
+  setTimeout(() => el.remove(), 600);
+}
+
+document.addEventListener('keydown', (e) => {
+  if (state === State.INTRO || state === State.COACH) {
+    if (e.key === 'Enter' || e.key === ' ') onPointer(e);
+  } else if (state === State.SELECT) {
+    if (e.key === 'ArrowUp')        selectedIdx = (selectedIdx + ROSTER.length - 1) % ROSTER.length;
+    else if (e.key === 'ArrowDown') selectedIdx = (selectedIdx + 1) % ROSTER.length;
+    else if (e.key === 'Enter' || e.key === ' ') confirmSelection();
+  } else if (state === State.PLAY) {
+    if (e.key === ' ' || e.key === 'Enter' || e.key === 'ArrowUp') {
+      onPointer({ preventDefault(){}, clientX: null, clientY: null });
+    }
+  } else if (state === State.RESULT) {
+    if (e.key === 'Enter' || e.key === ' ') resetForRetry();
+  }
+});
+
+canvas.addEventListener('mousedown', onPointer);
+canvas.addEventListener('touchstart', onPointer, { passive: false });
+
+function enterSelect() { state = State.SELECT; }
+
+function confirmSelection() {
+  chosenPlayer = ROSTER[selectedIdx];
+  initGameplay();
+  state = State.COUNTDOWN;
+  countdownStart = performance.now();
+  savedThisRun = false;
+  lastProgress = 0;
+  progressTimer = 0;
+}
+
+function resetForRetry() { state = State.INTRO; }
+
+let lastT = 0;
+function loop(t) {
+  const dt = t - lastT;
+  lastT = t;
+
+  if (state === State.COACH) {
+    coachCharTimer += dt;
+    while (coachCharTimer > 28) {
+      coachCharTimer -= 28;
+      if (coachCharIdx < coachLines[coachLineIdx].length) coachCharIdx++;
+      else coachLineComplete = true;
+    }
+  }
+
+  ctx.clearRect(0, 0, W, H);
+
+  switch (state) {
+    case State.INTRO:     drawIntroScene(t); break;
+    case State.COACH:     drawCoachScene(); break;
+    case State.SELECT:    drawSelectScene(t); break;
+    case State.COUNTDOWN: drawCountdownScene(t); break;
+    case State.PLAY:      updatePlay(t, dt); drawPlayScene(t); break;
+    case State.RESULT:    drawResultScene(t); break;
+  }
+
+  requestAnimationFrame(loop);
+}
+
+loadAll()
+  .then(() => {
+    loadingEl.classList.add('hidden');
+    state = State.INTRO;
+    requestAnimationFrame(loop);
+  })
+  .catch(err => {
+    loadingEl.textContent = 'FAILED TO LOAD ASSETS: ' + err.message;
+    console.error(err);
+  });
+</script>
+</body>
+</html>
