@@ -49,8 +49,8 @@ For GitHub Pages, push the whole folder to a repo and enable Pages — it works 
 
 | #  | Player    |
 |----|-----------|
-| 19 | Johnston  |
 | 8  | Quirico   |
+| 19 | Johnston  |
 | 52 | Spradling |
 | 98 | King      |
 | 91 | Soyk      |
